@@ -360,7 +360,6 @@ sub check_threshold {
     my $mod = $th_array->[0];
     my $lv1 = $th_array->[1];
     my $lv2 = $th_array->[2];
-#    verb("Checking: $attrib: $data $mod $lv1 $lv2");
 
     # verb("debug check_threshold: $mod : ".(defined($lv1)?$lv1:'')." : ".(defined($lv2)?$lv2:''));
     return "" if !defined($lv1) || ($mod eq '' && $lv1 eq ''); 
@@ -400,7 +399,6 @@ sub parse_percent {
 # this function is called when parsing threshold options data
 sub parse_threshold {
     my $thin = shift;
-    verb("Parsing: $thin");
     # link to an array that holds processed threshold data
     # array: 1st is type of check, 2nd is value2, 3rd is value2, 4th is option, 5th is nagios spec string representation for perf out
     my $th_array = [ '', undef, undef, '', '' ]; 
