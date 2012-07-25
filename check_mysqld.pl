@@ -310,6 +310,13 @@ sub help {
    Threshold values can also be specified as range in two forms:
       num1:num2  - warn if data is outside range i.e. if data<num1 or data>num2
       \@num1:num2 - warn if data is in range i.e. data>=num1 && data<=num2
+   Threshold values can also be specified as a percent of a global variable:
+      >95%max_connections - warn if data is greater than 95% of the max_connections
+          global variable
+      95%max_connections  - same as above (assumes >)
+      <15%max_connections - warn if data is less than 15% of the max_connections
+          global variable
+      USING THIS REQUIRES PERMISSION TO RUN 'SHOW GLOBAL VARIABLES'
 -c, --crit=STR[,STR[,STR[..]]]
    This option can only be used if '--variables' (or '-a') option above
    is used and number of values listed here must exactly match number of
