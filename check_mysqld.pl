@@ -226,7 +226,7 @@ my $o_verb=     undef;          # verbose mode
 my $o_version=  undef;          # version info option
 my $o_variables=undef;          # list of variables for warn and critical
 my @o_varsL=    ();             # array from above list
-my @o_varsLextra=  ();          # array of variables for % thresholds
+my @o_varsLglobalvar=  ();          # array of variables for % thresholds
 my $o_perfvars= undef;          # list of variables to include in perfomance data
 my @o_perfvarsL=();             # array from above list
 my $o_warn=     undef;          # warning level option
@@ -360,6 +360,7 @@ sub check_threshold {
     my $mod = $th_array->[0];
     my $lv1 = $th_array->[1];
     my $lv2 = $th_array->[2];
+#    verb("Checking: $attrib: $data $mod $lv1 $lv2");
 
     # verb("debug check_threshold: $mod : ".(defined($lv1)?$lv1:'')." : ".(defined($lv2)?$lv2:''));
     return "" if !defined($lv1) || ($mod eq '' && $lv1 eq ''); 
@@ -376,16 +377,16 @@ sub check_threshold {
 
 sub parse_percent {
     my $options = shift;
-    my $dataresults = shift;
+    my $global_variables = shift;
     for my $th_array (@{$options})
     {
         if ($th_array->[1] =~ /(\d+\.?\d*)%(\S*)/)
         {
             my $data_var_name = $2;
-            unless (isnum($dataresults->{$data_var_name}[0])) { print "$data_var_name is not a status variable or number\n"; exit $ERRORS{"UNKNOWN"};}
+            unless (isnum($global_variables->{$data_var_name})) { print "$data_var_name is not a status variable or number\n"; exit $ERRORS{"UNKNOWN"};}
         
-            #$dataresults will only contain variables mentioned in o_varsL and o_varsLextra
-            $th_array->[1] = $1*$dataresults->{$data_var_name}[0]/100;
+            #$global_variables will only contain variables mentioned in o_varsL and o_varsLglobalvar
+            $th_array->[1] = $1*$global_variables->{$data_var_name}/100;
             $th_array->[2] = undef;
             $th_array->[0] =~ s/%//;
             if ($th_array->[0] eq '') { $th_array->[0] = '>'; }
@@ -399,6 +400,7 @@ sub parse_percent {
 # this function is called when parsing threshold options data
 sub parse_threshold {
     my $thin = shift;
+    verb("Parsing: $thin");
     # link to an array that holds processed threshold data
     # array: 1st is type of check, 2nd is value2, 3rd is value2, 4th is option, 5th is nagios spec string representation for perf out
     my $th_array = [ '', undef, undef, '', '' ]; 
@@ -518,14 +520,14 @@ sub check_options {
 	     @ar_warnLv=split( /,/ , lc $o_warn );
          my @tmp = grep(/\^?[@|>|<|=|!]?~?\d+\.?\d*%/,@ar_warnLv);
          map(s/.*%//,@tmp);
-         push(@o_varsLextra, @tmp);
+         push(@o_varsLglobalvar, @tmp);
 	  }
 	  if (defined($o_crit)) {
-	     $o_crit.="~" if $o_crit =~ /,$/;
-	     @ar_critLv=split( /,/ , lc $o_crit );
+         $o_crit.="~" if $o_crit =~ /,$/;
+         @ar_critLv=split( /,/ , lc $o_crit );
          my @tmp = grep(/\^?[@|>|<|=|!]?~?\d+\.?\d*%/,@ar_critLv);
          map(s/.*%//,@tmp);
-         push(@o_varsLextra, @tmp);
+         push(@o_varsLglobalvar, @tmp);
 	  }
 	}
 	elsif (!defined($o_timecheck)) {
@@ -671,6 +673,33 @@ if ($sth->err) {
 }
 $sth->finish();
 
+
+my %global_variables;
+my $mysql_vname;
+my $mysql_value;
+#Only attempt collecting global_variables if we actually need them
+if (@o_varsLglobalvar > 0)
+{
+    $db_command="SHOW GLOBAL VARIABLES";
+    verb ("Mysql Query: $db_command"); 
+    $sth=$dbh->prepare($db_command);
+    if (!$sth->execute()) {
+        print "CRITICAL ERROR - Unable to execute '$db_command' on server '$HOSTNAME' connected as user '$USERNAME' - $DBI::errstr\n";
+        exit $ERRORS{"CRITICAL"};
+    }
+    $global_variables{$_} = undef foreach(@o_varsLglobalvar);
+    while (($mysql_vname,$mysql_value)=$sth->fetchrow_array()) {
+        $global_variables{$mysql_vname} = $mysql_value if (exists($global_variables{$mysql_vname}));
+        verb("Mysql Global Variables: $mysql_vname = $mysql_value");
+    }
+    
+    if ($sth->err) {
+        print "CRITICAL ERROR - Error retrieving data for '$db_command' on server '$HOSTNAME' connected as user '$USERNAME' - $sth->err\n";
+        exit $ERRORS{"CRITICAL"};
+    }
+    $sth->finish();
+}
+
 my @mvnum=(0,0,0);
 @mvnum=($1,$2,$3) if $mysql_version =~ /(\d+)\.(\d+)\.(\d+)/;
 verb("Mysql Data: $mysql_version | Numeric: $mvnum[0].$mvnum[1].$mvnum[2]");
@@ -696,14 +725,11 @@ my $statuscode = "OK";
 my $statusinfo = "";
 my $statusdata = "";
 my $perfdata = "";
-my $mysql_vname;
-my $mysql_value;
 my $chk = "";
 my $i;
 
 # load all data from mysql into internal hash array
 $dataresults{$_} = [undef, 0, 0] foreach(@o_varsL);
-$dataresults{$_} = [undef, 0, 0] foreach(@o_varsLextra);
 $dataresults{$_} = [undef, 0, 0] foreach(@o_perfvarsL);
 while (($mysql_vname,$mysql_value)=$sth->fetchrow_array()) {
     $mysql_vname =~ tr/[A-Z]/[a-z]/ ;
@@ -741,8 +767,8 @@ if (defined($o_timecheck)) {
 }
 
 # main loop to check if warning & critical attributes are ok
-parse_percent(\@o_warnL, \%dataresults);
-parse_percent(\@o_critL, \%dataresults);
+parse_percent(\@o_warnL, \%global_variables);
+parse_percent(\@o_critL, \%global_variables);
 for ($i=0;$i<scalar(@o_varsL);$i++) {
   if (defined($dataresults{$o_varsL[$i]}[0])) {
     if ($chk = check_threshold($o_varsL[$i],lc $dataresults{$o_varsL[$i]}[0],$o_critL[$i])) {
