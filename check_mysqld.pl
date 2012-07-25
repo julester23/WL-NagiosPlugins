@@ -185,6 +185,7 @@
 #
 # ============================ START OF PROGRAM CODE =============================
 
+use warnings;
 use strict;
 use IO::Socket;
 use Time::HiRes;
@@ -225,6 +226,7 @@ my $o_verb=     undef;          # verbose mode
 my $o_version=  undef;          # version info option
 my $o_variables=undef;          # list of variables for warn and critical
 my @o_varsL=    ();             # array from above list
+my @o_varsLextra=  ();          # array of variables for % thresholds
 my $o_perfvars= undef;          # list of variables to include in perfomance data
 my @o_perfvarsL=();             # array from above list
 my $o_warn=     undef;          # warning level option
@@ -358,6 +360,7 @@ sub check_threshold {
     my $mod = $th_array->[0];
     my $lv1 = $th_array->[1];
     my $lv2 = $th_array->[2];
+#    verb("Checking: $attrib: $data $mod $lv1 $lv2");
 
     # verb("debug check_threshold: $mod : ".(defined($lv1)?$lv1:'')." : ".(defined($lv2)?$lv2:''));
     return "" if !defined($lv1) || ($mod eq '' && $lv1 eq ''); 
@@ -372,10 +375,32 @@ sub check_threshold {
     return "";
 }
 
+sub parse_percent {
+    my $options = shift;
+    my $dataresults = shift;
+    for my $th_array (@{$options})
+    {
+        if ($th_array->[1] =~ /(\d+\.?\d*)%(\S*)/)
+        {
+            my $data_var_name = $2;
+            unless (isnum($dataresults->{$data_var_name}[0])) { print "$data_var_name is not a status variable or number\n"; exit $ERRORS{"UNKNOWN"};}
+        
+            #$dataresults will only contain variables mentioned in o_varsL and o_varsLextra
+            $th_array->[1] = $1*$dataresults->{$data_var_name}[0]/100;
+            $th_array->[2] = undef;
+            $th_array->[0] =~ s/%//;
+            if ($th_array->[0] eq '') { $th_array->[0] = '>'; }
+            if ($th_array->[0] eq '>') { $th_array->[5] = "~:" . $th_array->[1]; }
+            elsif ($th_array->[0] eq '<') { $th_array->[5] = $th_array->[1] . ":"; }
+            else { print "'" . $th_array->[0] . "' is not a valid prefix for % notation\n"; exit $ERRORS{"UNKNOWN"};}
+        }
+    }
+}
+
 # this function is called when parsing threshold options data
 sub parse_threshold {
     my $thin = shift;
-
+    verb("Parsing: $thin");
     # link to an array that holds processed threshold data
     # array: 1st is type of check, 2nd is value2, 3rd is value2, 4th is option, 5th is nagios spec string representation for perf out
     my $th_array = [ '', undef, undef, '', '' ]; 
@@ -416,12 +441,17 @@ sub parse_threshold {
 	$th_array->[5] = '@'.$th_array->[1].':'.$th_array->[1] if $th_array->[0] eq '=';
 	$th_array->[5] = $th_array->[1].':'.$th_array->[1] if $th_array->[0] eq '!';
     }
-    if ($th_array->[0] =~ /[>|<]/ && !isnum($th_array->[1])) {
+
+    #Look for percent
+    $th_array->[0] = "$at%" if ($th_array->[1] =~ /\d+\.?\d*%\S*/) && $th_array->[1] ne '';
+
+    if ($th_array->[0] =~ /^[>|<]$/ && !isnum($th_array->[1])) {
 	print "Numeric value required when '>' or '<' are used !\n";
         print_usage();
         exit $ERRORS{"UNKNOWN"};
     }
     # verb("debug parse_threshold: $th_array->[0] and $th_array->[1]");
+
     $th_array->[0] = '=' if !$th_array->[0] && !isnum($th_array->[1]) && $th_array->[1] ne '';
     if (!$th_array->[0] && isnum($th_array->[1])) { # this is just the number by itself, becomes 0:number check per nagios guidelines
 	$th_array->[2]=$th_array->[1];
@@ -488,10 +518,16 @@ sub check_options {
 	  if (defined($o_warn)) {
 	     $o_warn.="~" if $o_warn =~ /,$/;
 	     @ar_warnLv=split( /,/ , lc $o_warn );
+         my @tmp = grep(/\^?[@|>|<|=|!]?~?\d+\.?\d*%/,@ar_warnLv);
+         map(s/.*%//,@tmp);
+         push(@o_varsLextra, @tmp);
 	  }
 	  if (defined($o_crit)) {
 	     $o_crit.="~" if $o_crit =~ /,$/;
-    	     @ar_critLv=split( /,/ , lc $o_crit );
+	     @ar_critLv=split( /,/ , lc $o_crit );
+         my @tmp = grep(/\^?[@|>|<|=|!]?~?\d+\.?\d*%/,@ar_critLv);
+         map(s/.*%//,@tmp);
+         push(@o_varsLextra, @tmp);
 	  }
 	}
 	elsif (!defined($o_timecheck)) {
@@ -669,6 +705,7 @@ my $i;
 
 # load all data from mysql into internal hash array
 $dataresults{$_} = [undef, 0, 0] foreach(@o_varsL);
+$dataresults{$_} = [undef, 0, 0] foreach(@o_varsLextra);
 $dataresults{$_} = [undef, 0, 0] foreach(@o_perfvarsL);
 while (($mysql_vname,$mysql_value)=$sth->fetchrow_array()) {
     $mysql_vname =~ tr/[A-Z]/[a-z]/ ;
@@ -706,6 +743,8 @@ if (defined($o_timecheck)) {
 }
 
 # main loop to check if warning & critical attributes are ok
+parse_percent(\@o_warnL, \%dataresults);
+parse_percent(\@o_critL, \%dataresults);
 for ($i=0;$i<scalar(@o_varsL);$i++) {
   if (defined($dataresults{$o_varsL[$i]}[0])) {
     if ($chk = check_threshold($o_varsL[$i],lc $dataresults{$o_varsL[$i]}[0],$o_critL[$i])) {
